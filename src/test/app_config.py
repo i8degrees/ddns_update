@@ -72,3 +72,12 @@ assert app.api_host() == 'ns4'
 #res = app.find_zone("ha.home.arpa")
 #res = app.find_ptr_zone("14.168.192.in-addr.arpa")
 
+#if DNSUPDATE_ZONE_PTR == config.lookup_reverse("home.arpa"):
+#elif DNSUPDATE_ZONE_PTR == config.lookup_reverse("ha.home.arpa"):
+#elif DNSUPDATE_ZONE_PTR == config.lookup_reverse("mgmt.home.arpa"):
+
+#DNSUPDATE_ZONE_PTR = config.lookup_reverse("ha.home.arpa")
+#DNSUPDATE_ZONE_PTR = config.lookup_reverse("mgmt.home.arpa")
+#DNSUPDATE_ZONE_PTR = config.lookup_reverse("iot.home.arpa")
+#DNSUPDATE_ZONE_PTR = config.lookup_reverse("iot.ha.home.arpa")
+#DNSUPDATE_ZONE_PTR = config.lookup_reverse("wifi.home.arpa")

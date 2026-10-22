@@ -24,6 +24,8 @@ env.setdefault("DNSMASQ_LOG_DHCP", False)
 env.setdefault("DNSMASQ_TAGS", "")
 env.setdefault("DNSMASQ_INTERFACE", "")
 env.setdefault("DNSMASQ_DATA_MISSING", False)
+env.setdefault("DNSMASQ_OLD_HOSTNAME", "")
+env.setdefault("DNSMASQ_SUPPLIED_HOSTNAME", "")
 
 log = logging.getLogger('ddns_psupdate')
 
@@ -126,19 +128,31 @@ DNSMASQ_TAGS = \
 if DNSMASQ_TAGS and len(DNSMASQ_TAGS) > 0:
     print(f'DNSMASQ_TAGS={DNSMASQ_TAGS}')
 
+# >> This is not present for "old" actions (dnsmasq restarts)
 DNSMASQ_INTERFACE = \
     env["DNSMASQ_INTERFACE"]
 if DNSMASQ_INTERFACE and len(DNSMASQ_INTERFACE) > 0:
     print(f'DNSMASQ_INTERFACE={DNSMASQ_INTERFACE}')
 
-# >> This env is set to "1" (True) during "old" events and signifies to
-# >> us -- at the very minimum -- that we do not need to iterate through
-# >> the main loop as there is nothing to be done.
+# >> DNSMASQ_DATA_MISSING is set to "1" during "old" events for existing
+# >> leases generated at startup to indicate that data not stored in the
+# >> persistent lease database will not be present. This comprises everything
+# >> other than IP address, hostname, MAC address, DUID, IAID and lease length
+# >> or expiry time.
+# >>
 DNSMASQ_DATA_MISSING = \
     env["DNSMASQ_DATA_MISSING"]
-if DNSMASQ_DATA_MISSING and bool(DNSMASQ_DATA_MISSING) == True:
-    print("DNSMASQ_DATA_MISSING=1\nExiting...\n")
-    sys.exit(0);
+
+# >> The manual page for [dnsmasq][0] states that If a lease used to have a
+# >> hostname, which is removed, an "old" event is generated with the new state
+# >> of the lease, ie no name, and the former name is provided in the
+# >> environment variable DNSMASQ_OLD_HOSTNAME.
+# >>
+# >> [0]:https://thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html
+DNSMASQ_OLD_HOSTNAME = \
+    env["DNSMASQ_OLD_HOSTNAME"]
+if DNSMASQ_OLD_HOSTNAME and len(DNSMASQ_OLD_HOSTNAME) > 0:
+    print(f'DNSMASQ_OLD_HOSTNAME={DNSMASQ_OLD_HOSTNAME}')
 
 # !! IMPORTANT(JEFF): DNSMASQ_DOMAIN is a required environment variable of which is
 # only passed to this script when the end-user has dnsmasq configured with
@@ -147,9 +161,11 @@ if DNSMASQ_DATA_MISSING and bool(DNSMASQ_DATA_MISSING) == True:
 DNSMASQ_DOMAIN = \
   canonical_dns_name(env["DNSMASQ_DOMAIN"])
 
-# ?? Rename to DNSMASQ_DOMAIN_PTR
+# ?? Rename to ~~DNSMASQ_DOMAIN_PTR~~ (not part of the env dnsmasq touches)
 # !! IMPORTANT(JEFF): This is required for the REST endpoint data input for PTR
 # !! zone updates
+DNSUPDATE_ZONE_PTR = \
+    canonical_dns_name(env["DNSUPDATE_ZONE_PTR"])
 
 def main() -> None:
   #args = sys.argv
@@ -172,38 +188,51 @@ def main() -> None:
   elif DNSMASQ_DOMAIN == canonical_dns_name("wifi.home.arpa"):
      DNSUPDATE_ZONE_PTR = canonical_dns_name("16.168.192.in-addr.arpa")
 
-  log.debug(f'DNSMASQ_DOMAIN={env["DNSMASQ_DOMAIN"]}')
-  log.debug(f'DNSUPDATE_ZONE_PTR={env["DNSUPDATE_ZONE_PTR"]}')
+  log.debug(f'DNSMASQ_DOMAIN={DNSMASQ_DOMAIN}')
+  log.debug(f'DNSUPDATE_ZONE_PTR={DNSUPDATE_ZONE_PTR}')
 
   # !! FIXME
   assert DNSMASQ_DOMAIN != "None." and DNSMASQ_DOMAIN != "", "DNSMASQ_DOMAIN must be set"
-  DNSUPDATE_ZONE_PTR = None
-  if env["DNSUPDATE_ZONE_PTR"] and len(env["DNSUPDATE_ZONE_PTR"]) > 0:
-    DNSUPDATE_ZONE_PTR = \
-      canonical_dns_name(env["DNSUPDATE_ZONE_PTR"])
-  else:
-    DNSUPDATE_ZONE_PTR = None
+  assert DNSMASQ_DOMAIN != "None" and DNSMASQ_DOMAIN != "", "DNSMASQ_DOMAIN must be set"
 
   # !! Required argument
   # >> DNSMASQ may pass DUID made of the link layer *...* instead of
   # >> See man 8 dnsmasq
   # >> RFC XXX
-  
+
   CMD = args.CMD.lower()
   MAC_ADDR = args.MAC_ADDR
   IP_ADDR = args.IP_ADDR
-  L_HOSTNAME = short_hostname(args.HOSTNAME)
-  
+  L_HOSTNAME = ""
+  if env["DNSMASQ_SUPPLIED_HOSTNAME"] and (len(env["DNSMASQ_SUPPLIED_HOSTNAME"]) > 0) and (env["DNSMASQ_SUPPLIED_HOSTNAME"] == args.HOSTNAME):
+      L_HOSTNAME = short_hostname(env["DNSMASQ_SUPPLIED_HOSTNAME"])
+  else:
+    L_HOSTNAME = short_hostname(args.HOSTNAME)
+
+  assert L_HOSTNAME != "", "L_HOSTNAME must be a given argument to script"
+
+    # >> (This state is set to "1" (True) during "old" events and signifies to
+    # >> me that we do not need to iterate through the main loop,
+    # >> *unless* DNSMASQ_OLD_HOSTNAME is present.
+  if DNSMASQ_DATA_MISSING and bool(DNSMASQ_DATA_MISSING) == True:
+    if DNSMASQ_OLD_HOSTNAME and len(DNSMASQ_OLD_HOSTNAME) > 0:
+        L_HOSTNAME = short_hostname(DNSMASQ_OLD_HOSTNAME)
+    else:
+        L_HOSTNAME = short_hostname(args.HOSTNAME)
+        # This error condition should rarely, if ever occur!
+        print("DNSMASQ_DATA_MISSING=1 without DNSMASQ_OLD_HOSTNAME present\n")
+        #exit(0);
+
+  assert MAC_ADDR != "", "MAC must be a given argument to script"
+  assert L_HOSTNAME != "None." and L_HOSTNAME != "", "L_HOSTNAME should be set"
+  assert IP_ADDR != "", "IP_ADDR must be a given argument to script"
+
   PTR = reverse_ip(IP_ADDR)
   RIP = f'{PTR}.in-addr.arpa.'
-  
+
   FQDN = canonical_dns_name(L_HOSTNAME) + canonical_dns_name(str(DNSMASQ_DOMAIN))
-  log.debug(f'FQDN:{FQDN}')
-  
-  assert MAC_ADDR != "", "MAC must be a given argument to script"
-  assert IP_ADDR != "", "IP_ADDR must be a given argument to script"
-  assert L_HOSTNAME != "", "L_HOSTNAME must be a given argument to script"
   assert FQDN != "", "FQDN must be a given argument to script"
+  log.debug(f'FQDN:{FQDN}')
 
   PDNS_API_URL_SUFFIX = \
       "/api/v1/servers/localhost/zones"
